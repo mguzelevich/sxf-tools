@@ -1,13 +1,20 @@
 # -*- coding: utf-8 -*-
 
-import struct
 from tools import split_bits
 
-from rsc.classifiers import RscClassifierObject
-from rsc.semantics import RscSemanticObject
-from rsc.semantic_classifiers import RscSemanticClassifierObject
-from rsc.semantic_defaults import RscSemanticDefaultsObject
-from rsc.semantic_posibilities import RscSemanticPosibilitiesObject
+import struct
+import yaml
+
+from rsc.classifiers import classifiers2dict
+from rsc.semantics import semantics2dict
+
+from tools import msg, err
+
+
+def unicode_representer(dumper, uni):
+    node = yaml.ScalarNode(tag=u'tag:yaml.org,2002:str', value=uni)
+    return node
+yaml.add_representer(unicode, unicode_representer)
 
 
 class RSC(object):
@@ -16,45 +23,45 @@ class RSC(object):
 
     @staticmethod
     def parse(data):
-        rsc = RSC()
-        raw = data.read(308)
-        rsc.parse_header(raw)
-        rsc.init_tables(data)
+        rsc = RSC(data)
+        rsc.parse_header()
 
-        rsc.check_tables(data)
+        rsc.init_tables()
+        rsc.check_tables()
+        rsc.parse_tables()
 
-        rsc.parse_tables(data)
+        rsc.parse_classifier_objects()
+        rsc.parse_semantics()
 
-        rsc.parse_classifier_objects(data)
-
-        rsc.parse_semantics(data)
-        rsc.parse_semantic_classifiers(data)
-        rsc.parse_semantic_defaults(data)
-        rsc.parse_semantic_images(data)
-        rsc.parse_semantics_posibilities(data)
-
-        rsc.parse_colors(data)
-        rsc.parse_fonts(data)
-        rsc.parse_libraries(data)
-        rsc.parse_limits(data)
-        rsc.parse_palettes(data)
-        rsc.parse_parameters(data)
-        rsc.parse_printing(data)
-        rsc.parse_segments(data)
-
-        rsc.info()
+        rsc.parse_colors()
+        rsc.parse_fonts()
+        rsc.parse_libraries()
+        rsc.parse_limits()
+        rsc.parse_palettes()
+        rsc.parse_parameters()
+        rsc.parse_printing()
+        rsc.parse_segments()
         return rsc
 
-    def __init__(self):
+    def __init__(self, filehandler):
         self.corrupted_tables = {}
+        self.filehandler = filehandler
 
     def info(self):
-        print 'RSC v.%s - %s classifier objects' % (
-            self.version,
-            self.classifier_objects[2],
+        err(
+            'RSC v.%s - %s classifier objects' % (
+                self.version,
+                self.classifier_objects[2],
+            )
         )
 
-    def check_tables(self, data):
+    def dump(self):
+        with open(self.args.obj_file, 'w+') as f:
+            f.write(yaml.dump(self.objects_dict, allow_unicode=True))
+        with open(self.args.sem_file, 'w+') as f:
+            f.write(yaml.dump(self.semantics_dict, allow_unicode=True))
+
+    def check_tables(self):
         tables = [
             'OBJ\0',
             'SEM\0',
@@ -78,25 +85,27 @@ class RSC(object):
         for prefix in tables:
             offset, length, count = self.TABLES[prefix]
 
-            data.seek(offset - 4, 0)
-            raw = data.read(length + 4)
+            self.filehandler.seek(offset - 4, 0)
+            raw = self.filehandler.read(length + 4)
 
             table_prefix = struct.unpack('<4s', raw[0:4])[0]
             if prefix != table_prefix:
-                print 'Incorrect section prefix [%s] != [%s]' % (table_prefix, prefix)
+                sys.stderr.write(
+                    'Incorrect section prefix [%s] != [%s]\n' % (table_prefix, prefix)
+                )
                 self.corrupted_tables[prefix]
                 # raise RuntimeError('Incorrect section prefix [%s] != [%s]' % (table_prefix, prefix))
 
-    def get_table_data(self, prefix, data):
+    def get_table_data(self, prefix):
         offset, length, count = self.TABLES[prefix]
-        data.seek(offset, 0)
-        raw = data.read(length)
-        return raw, count
+        self.filehandler.seek(offset, 0)
+        raw = self.filehandler.read(length)
+        return raw, offset, count
 
-    def init_tables(self, data):
+    def init_tables(self):
         offset, length, count = self.tables
-        data.seek(offset, 0)
-        raw = data.read(length)
+        self.filehandler.seek(offset, 0)
+        raw = self.filehandler.read(length)
         idx = 0
         for i in xrange(count):
             self.cmyk_colors = struct.unpack('<III', raw[idx:idx + 12])
@@ -122,36 +131,25 @@ class RSC(object):
             # GRS
         }
 
-    def parse_header(self, data):
+    def parse_header(self):
         # Назначение поля Смещение    Длина   Комментарий
         # Идентификатор файла 0   4   0x00435352 (RSC)
+        data = self.filehandler.read(308)
+
         prefix = struct.unpack('<4s', data[0:4])[0]
         if prefix != 'RSC\0':
             raise RuntimeError('Incorrect file begin signature')
 
-        # Длина файла 4   4   В байтах
-        self.full_length = struct.unpack('<I', data[4:8])[0]
-
-        # Версия структуры RSC    8   4   0x0700
-        self.version = struct.unpack('<I', data[8:12])[0]
-
-        # Кодировка   12  4   Для всего файла
-        self.encoding = struct.unpack('<I', data[12:16])[0]
-
-        # Номер состояния файла   16  4   Учет корректировок, требующих перегрузки данных
-        self.state_number = struct.unpack('<I', data[16:20])[0]
-
-        # Номер модификации состояния 20  4   Учет корректировок
-        self.correction = struct.unpack('<I', data[20:24])[0]
-
-        # Используемый язык   24  4   1-английский, 2-русский
-        self.language = struct.unpack('<I', data[24:28])[0]
-
-        # Максимальный идентификатор таблицы объектов 28  4   Идентификатор для нового объекта
-        self.max_id = struct.unpack('<I', data[28:32])[0]
-
-        # Дата создания файла 32  8   ГГГГММДД
-        self.created_at = struct.unpack('<8s', data[32:40])[0]
+        (
+            self.full_length,  # Длина файла 4   4   В байтах
+            self.version,  # Версия структуры RSC    8   4   0x0700
+            self.encoding,  # Кодировка   12  4   Для всего файла
+            self.state_number,  # Номер состояния файла   16  4   Учет корректировок, требующих перегрузки данных
+            self.correction,  # Номер модификации состояния 20  4   Учет корректировок
+            self.language,  # Используемый язык   24  4   1-английский, 2-русский
+            self.max_id,  # Максимальный идентификатор таблицы объектов 28  4   Идентификатор для нового объекта
+            self.created_at,  # Дата создания файла 32  8   ГГГГММДД
+        ) = struct.unpack('<IIIIIII8s', data[4:40])
 
         # Тип карты   40  32 символьное поле 32 байта
         # Тип карты/ Значение поля  не влияет на применение с картами других типов.
@@ -278,7 +276,7 @@ class RSC(object):
         self.palettes_clolors = struct.unpack('<I', data[304:308])[0]
         # ИТОГО:  308 байт
 
-    def parse_classifier_objects(self, data):
+    def parse_classifier_objects(self):
         """
         2.1.2 Структура таблицы объектов  классификатора
         Таблица объектов классификатора находится по смещению на таблицу объектов, имеет общую длину,
@@ -286,125 +284,40 @@ class RSC(object):
         Перед таблицей объектов классификатора находится идентификатор таблицы “OBJ” (шестнадцатеричное число 0X004A424F)  (не входит в длину таблицы).
         Записи таблицы объектов переменной длины, не менее 112 байт. Одна запись на один объект классификатора.
         """
-        if 'OBJ\0' in self.corrupted_tables:
-            return
-        
-        raw, count = self.get_table_data('OBJ\0', data)
+        fail = False
+        for tbl in ('OBJ\0', 'POS\0',):
+            fail = fail and tbl in self.corrupted_tables
 
-        idx = 0
-        for i in xrange(count):
-            record_length = struct.unpack('<I', raw[idx:idx + 4])[0]
-            record_raw = raw[idx:idx + record_length]
-            idx += record_length
+        if fail:
+            raise RuntimeError('Errors in one of semantics tables')
 
-            record = RscClassifierObject.parse(record_raw)
-            record.info()
-            # self.records.append(record)
+        classifiers2dict(self)
 
-    def parse_semantics(self, data):
-        """
-        2.1.3 Структура таблицы семантик классификатора
-        Таблица семантик классификатора находится по смещению на таблицу семантик,
-        имеет общую длину, указанную в заголовке классификатора.
-        Перед таблицей семантик классификатора находится идентификатор таблицы “.SEM” (шестнадцатеричное число 0X004D4553)
-        (не входит в длину таблицы). Записи таблицы семантики постоянной длины, 84 байт.
-        Одна запись на одну семантику классификатора.
-        """
-        if 'SEM\0' in self.corrupted_tables:
-            return
-        
-        raw, count = self.get_table_data('SEM\0', data)
+    def parse_semantics(self):
+        fail = False
+        for tbl in ('SEM\0', 'CLS\0', 'DEF\0', 'POS\0',):
+            fail = fail and tbl in self.corrupted_tables
 
-        idx = 0
-        for i in xrange(count):
-            record = RscSemanticObject.parse(raw[idx:idx + 84])
-            record.info()
-            idx += 84
+        if fail:
+            raise RuntimeError('Errors in one of semantics tables')
 
-    def parse_semantic_classifiers(self, data):
-        """
-        2.1.4 Структура таблицы  классификатора значений семантики
-        Для каждой семантической характеристики может быть создан классификатор значений.
-        При этом для числовых характеристик одному коду обычно соответствует диапазон значений (например, ширина реки: до 5м - 1, от 5 до 10 - 2 и т.д.),
-        для символьных характеристик одному коду соответствует одно значение (материал строения: дерево - 1, кирпич - 2 и т.д.).
-        Если для характеристики создается классификатор значений, то в таблице семантики она объявляется числовой
-        (физически ее значение - числовой код, но при работе с этой характеристикой в системе электронных карт будет отображаться логическое значение, соответствующее текущему коду).
-        Записи классификатора значений относящиеся к конкретной семантике лежат в таблице подряд.
-        Таблица классификатора значений семантики находится по смещению на таблицу классификатора значений семантики.
-        Имеет общую длину, указанную в заголовке классификатора.
-        Перед таблицей классификатора значений семантики находится идентификатор таблицы “.CLS” (шестнадцатеричное число 0X00534С43)
-        (не входит в длину таблицы). Записи таблицы классификатора значений семантики постоянной длины, 36 байт.
-        Количество записей на одну семантику классификатора указывается в таблице семантики.
-        Смещение на записи классификатора значений для конкретной семантики, указываются в таблице семантики.
-        """
-        if 'CLS\0' in self.corrupted_tables:
-            return
-        
-        raw, count = self.get_table_data('CLS\0', data)
+        semantics2dict(self)
 
-        idx = 0
-        for i in xrange(count):
-            record = RscSemanticClassifierObject.parse(raw[idx:idx + 36])
-            record.info()
-            idx += 36
-
-    def parse_semantic_defaults(self, data):
-        """
-        2.1.5 Структура таблицы  умалчиваемых значений семантики
-        Каждой семантической характеристике с числовым значением (в том числе и классификатором значений) можно назначить максимальное, минимальное и умалчиваемое значение. Для каждой возможной семантики отдельного объекта тоже можно назначить максимальное, минимальное и умалчиваемое значение семантики для данного объекта классификатора.   Все эти значения лежат в одной таблице.    Записи умалчиваемых значений  относящиеся к конкретной семантике лежат в таблице подряд.
-        Таблица умалчиваемых значений семантики находится по смещению на таблицу умолчаний семантики.
-        Имеет общую длину, указанную в заголовке классификатора.
-        Перед таблицей умалчиваемых значений семантики находится идентификатор таблицы “.DEF” (шестнадцатеричное число 0X00464544)
-        (не входит в длину таблицы).
-        Записи таблицы умалчиваемых значений семантики постоянной длины, 32 байта. Количество записей на одну семантику классификатора указывается в таблице семантики. Смещение на записи умалчиваемых значений для конкретной семантики, указываются в таблице семантики.
-        """
-        if 'DEF\0' in self.corrupted_tables:
-            return
-        
-        raw, count = self.get_table_data('DEF\0', data)
-
-        idx = 0
-        for i in xrange(count):
-            record = RscSemanticDefaultsObject.parse(raw[idx:idx + 32])
-            record.info()
-            idx += 32
-
-    def parse_semantics_posibilities(self, data):
-        """
-        2.1.6 Структура таблицы  возможных  семантик объекта
-        Для каждого объекта классификатора пользователь может назначить обязательную или возможную семантику. Если семантика возможная, заполнение ее при нанесении объекта на карту не обязательно. Если пользователь не заполнит значение обязательной семантики объекта, семантика будет записана с умалчиваемым значением.
-        Все объекты серии имеют одну запись в таблице возможных семантик.
-        Перед таблицей возможных семантик объекта находится идентификатор таблицы “.POS” (шестнадцатеричное число 0X00534F50)  (не входит в длину таблицы).  Записи таблицы умалчиваемых значений семантики переменной длины, более 20 байт.
-        """
-        if 'POS\0' in self.corrupted_tables:
-            return
-        
-        raw, count = self.get_table_data('POS\0', data)
-
-        idx = 0
-        for i in xrange(count):
-            record_length = struct.unpack('<I', raw[idx:idx + 4])[0]
-            record_raw = raw[idx:idx + record_length]
-            idx += record_length
-
-            record = RscSemanticPosibilitiesObject.parse(record_raw)
-            record.info()
-
-    def parse_segments(self, data):
+    def parse_segments(self):
         """
         2.1.7 Структура таблицы  слоев
         Таблица слоев классификатора находится по смещению на таблицу слоев. Имеет общую длину, указанную в заголовке классификатора.
         Перед таблицей слоев (сегментов) находится идентификатор таблицы “.SEG” (шестнадцатеричное число 0X00474553)  (не входит в длину таблицы).  Записи таблицы слоев (сегментов) переменной длины, более 60 байт.
         """
         offset, length, count = self.segments
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'SEG\0':
             raise RuntimeError('Incorrect segments section prefix [%s]' % prefix)
 
-    def parse_limits(self, data):
+    def parse_limits(self):
         """
         2.1.8 Структура таблицы  порогов
         Таблица порогов представляет собой двоичное описание серии объектов.
@@ -412,99 +325,99 @@ class RSC(object):
         Перед таблицей порогов находится идентификатор таблицы “.LIM” (шестнадцатеричное число 0X004D494C)  (не входит в длину таблицы).  Записи таблицы порогов переменной длины.
         """
         offset, length, count = self.limits
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'LIM\0':
             raise RuntimeError('Incorrect limits section prefix [%s]' % prefix)
 
-    def parse_parameters(self, data):
+    def parse_parameters(self):
         """
         2.1.9 Структура таблиц параметров экрана и  печати
         Таблица параметров  классификатора находится по смещению на таблицу параметров. Имеет общую длину, указанную в заголовке классификатора.
         Перед таблицей параметров находится идентификатор таблицы “.PAR” (шестнадцатеричное число 0X00524150)  (не входит в длину таблицы).  Записи таблицы параметров переменной длины, более 8 байт.
         """
         offset, length, count = self.parameters
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'PAR\0':
             raise RuntimeError('Incorrect parameters section prefix [%s]' % prefix)
 
-    def parse_printing(self, data):
+    def parse_printing(self):
         """
         Таблица параметров печати  классификатора находится по смещению на таблицу параметров печати. Имеет общую длину, указанную в заголовке классификатора.
         Перед таблицей параметров находится идентификатор таблицы “.PRN “(шестнадцатеричное число 0X004E5250)  (не входит в длину таблицы).  Записи таблицы параметров переменной длины, более 8 байт.  Таблицы имеют одинаковую структуру.
         Для каждого объекта классификатора обязательно есть экранные параметры, а параметров печати может не быть. При записи в файл длина записи выравнивается на 4.
         """
         offset, length, count = self.printing
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'PRN\0':
             raise RuntimeError('Incorrect printing parameters section prefix [%s]' % prefix)
 
-    def parse_palettes(self, data):
+    def parse_palettes(self):
         """
         2.1.10 Структура таблицы  палитр
         Таблица палитр классификатора находится по смещению на таблицу палитр. Имеет общую длину, указанную в заголовке классификатора.
         Перед таблицей палитр находится идентификатор таблицы “.PAL” (шестнадцатеричное число 0X004C4150)  (не входит в длину таблицы).  Записи таблицы палитр постоянной длины 1056 байт.
         """
         offset, length, count = self.palettes
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'PAL\0':
             raise RuntimeError('Incorrect palettes section prefix [%s]' % prefix)
 
-    def parse_fonts(self, data):
+    def parse_fonts(self):
         """
         2.1.11 Структура таблицы  шрифтов
         Таблица шрифтов классификатора находится по смещению на таблицу шрифтов. Имеет общую длину, указанную в заголовке классификатора.
         Перед таблицей шрифтов находится идентификатор таблицы “.TXT” (шестнадцатеричное число 0X00545854)  (не входит в длину таблицы).  Записи таблицы шрифтов постоянной длины 72 байта.
         """
         offset, length, count = self.fonts
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'TXT\0':
             raise RuntimeError('Incorrect fonts section prefix [%s]' % prefix)
 
-    def parse_libraries(self, data):
+    def parse_libraries(self):
         """
         2.1.12 Структура таблицы  библиотек
         Таблица библиотек классификатора находится по смещению на таблицу библиотек. Имеет общую длину, указанную в заголовке классификатора.
         Перед таблицей библиотек находится идентификатор таблицы “.IML” (шестнадцатеричное число 0X004C4D49)  (не входит в длину таблицы).  Записи таблицы библиотек постоянной длины 120 байт.
         """
         offset, length, count = self.libraries
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'IML\0':
             raise RuntimeError('Incorrect libraries section prefix [%s]' % prefix)
 
-    def parse_semantic_images(self, data):
+    def parse_semantic_images(self):
         """
 
         """
         offset, length, count = self.semantic_images
         if not (length and count):
-            print 'Empty semantic images section'
+            sys.stderr.write('Empty semantic images section\n')
             return
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'DEF\0':
             raise RuntimeError('Incorrect images section prefix [%s]' % prefix)
 
-    def parse_tables(self, data):
+    def parse_tables(self):
         """
         2.1.12 Структура таблицы  таблиц
         Таблица таблиц  классификатора находится по смещению на таблицу таблиц. Имеет общую длину, указанную в заголовке классификатора.
@@ -513,11 +426,11 @@ class RSC(object):
         """
         if 'TAB\0' in self.corrupted_tables:
             return
-        
-        raw, count = self.get_table_data('TAB\0', data)
+
+        raw, offset, count = self.get_table_data('TAB\0')
 
         if count > 1:
-            print 'Incorrtct tables data'
+            sys.stderr.write('Incorrect tables data\n')
 
         idx = 0
         for i in xrange(count):
@@ -525,15 +438,15 @@ class RSC(object):
             idx += 12
             # reserved = struct.unpack('<60B', raw[idx + 12:idx + 72])
 
-    def parse_colors(self, data):
+    def parse_colors(self):
         """
         2.1.12 Структура таблицы  CMYK цветов для печати
         Таблица цветов для печати классификатора находится по смещению на таблицу цветов печати, указанную в таблице таблиц. Имеет общую длину, указанную в таблице таблиц классификатора.
         Перед таблицей цветов для печати находится идентификатор таблицы “.СMY” (шестнадцатеричное число 0X00594D43)  (не входит в длину таблицы).  Записи таблицы цветов для печати постоянной длины 1024 байта.
         """
         offset, length, count = self.cmyk_colors
-        data.seek(offset - 4, 0)
-        raw = data.read(length + 4)
+        self.filehandler.seek(offset - 4, 0)
+        raw = self.filehandler.read(length + 4)
 
         prefix = struct.unpack('<4s', raw[0:4])[0]
         if prefix != 'CMY\0':
