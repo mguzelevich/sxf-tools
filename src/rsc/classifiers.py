@@ -1,7 +1,15 @@
 # -*- coding: utf-8 -*-
 
 import struct
-from tools import split_bits, print_hex, strip_0, msg, err
+
+from tools import (
+    data2dict,
+    # err,
+    # msg,
+    # print_hex,
+    # split_bits,
+    strip_0,
+)
 
 
 class OBJECT_TYPE(object):
@@ -38,95 +46,72 @@ class DIGITIZE_DIRECTION(object):
     }
 
 
+OBJ_HEADER_DESC = (
+    # datatype, name, comment (# Назначение поля / Смещение / Длина / Комментарий)
+    ('I', 'full_length', 'Длина записи объекта    0   4   В байтах', ),
+    ('I', 'classifier_code', 'Классификационный код   4   4', ),
+    ('I', 'internal_code', 'Внутренний код объекта  8   4   Порядковый номер объекта (может меняться) (с 1)', ),
+    ('I', 'id', 'Идентификационный код   12  4   Неизменяемый уникальный номер объекта', ),
+    ('32s', 'short_name', 'Короткое имя объекта    16  32  Уникальное символьное имя (ANSI)', ),
+    ('32s', 'name', 'Название    48  32  ANSI', ),
+    ('B', 'localization', 'Характер локализации    80  1', ),
+    ('B', 'segment', 'Номер слоя (сегмента)   81  1   Число от 0 до 255', ),
+    ('B', 'is_scalable', 'Признак масштабируемости    82  1   0 - условный знак объекта не масштабируемый; 1 - знак масштабируется;', ),
+    ('B', 'visibility_low', 'Нижняя граница видимости    83  1   Число от 0 до 15 (N1)', ),
+    ('B', 'visibility_high', 'Верхняя граница видимости   84  1   "Число от 0 до 15 (15 – N2)"', ),
+    ('B', 'localization_extention', 'Расширение локализации  85  1  "1 - при создании линейных объектов учитывать две точки метрики 0 – все точки метрики"', ),
+    ('B', 'digitize_direction', 'Направление цифрования  86  1', ),
+    ('B', 'display_with_semantic', 'Отображение с учетом семантики  87  1   1- для объектов с внешним видом пользователя, учитывающих семантику', ),
+    ('h', 'object_number', 'Номер расширения +88 2 Для объектов из серии – номер объекта в серии, для остальных 0.', ),
+    ('B', 'connected_label_count', 'Количество связанных подписей   90  1   Число от 0 до 16', ),
+    ('B', 'compressable', 'Признак сжатия объекта  91  1   "Возможность сжатия объекта при уменьшении масштаба 1 – не сжимать"', ),
+    ('B', 'max_scale', 'Максимальное увеличение 92  1   "Максимальное увеличение объекта (от 1 до 25.0 раз) Значения от 0 до 250"', ),
+    ('B', 'min_scale', 'Максимальное уменьшение 93  1   "Максимальное уменьшение объекта (от 1 до 25.0 раз) Значения от 0 до 250"', ),
+    ('B', 'is_view_borders', 'Флаг включения границ   94  1   Флаг включения границ видимости', ),
+    ('B', None, 'Резерв  95  1', ),
+)
+
+OBJ_CONNECTED_LABEL_DESC = (
+    # Связанная подпись объекта определяет шрифт, предназначенный для нанесения подписей объекта,
+    # текст которых содержится в качестве семантической характеристики этого объекта.
+    ('I', 'label_id', 'Идентификационный код связанной подписи 0   4   Неизменяемый уникальный номер подписи', ),
+    ('I', 'semantic_id', 'Классификационный код семантики 4   4   Код семантики объекта, содержащей текст подписи', ),
+    ('7s', 'prefix', 'Постоянный префикс для подписи  8   7   В байтах', ),
+    ('B', 'decimal_points', 'Количество десятичных знаков после запятой  15  1   Используется при печати подписи', ),
+)
+
+
 def classifiers2dict(rsc):
     result = {}
-    obj_raw, obj_offset, obj_count = rsc.get_table_data('OBJ\0')
-    pos_raw, pos_offset, pos_count = rsc.get_table_data('POS\0')
+    obj_raw, obj_offset, obj_count = rsc.get_table_data('obj')
+    pos_raw, pos_offset, pos_count = rsc.get_table_data('pos')
 
     obj_idx = 0
     for i in xrange(obj_count):
-        # Назначение поля Смещение    Длина   Комментарий
-        (
-            full_length,  # Длина записи объекта    0   4   В байтах
-            classifier_code,  # Классификационный код   4   4
-            internal_code,  # Внутренний код объекта  8   4   Порядковый номер объекта (может меняться) (с 1)
-            id,   # Идентификационный код   12  4   Неизменяемый уникальный номер объекта
-            short_name,   # Короткое имя объекта    16  32  Уникальное символьное имя (ANSI)
-            name,   # Название    48  32  ANSI
-            localization,  # Характер локализации    80  1
-            segment,  # Номер слоя (сегмента)   81  1   Число от 0 до 255
-            is_scalable,  # Признак масштабируемости    82  1   0 - условный знак объекта не масштабируемый; 1 - знак масштабируется;
-            visibility_low,  # Нижняя граница видимости    83  1   Число от 0 до 15 (N1)
-            visibility_high,  # Верхняя граница видимости   84  1   "Число от 0 до 15 (15 – N2)"
-            localization_extention,  # Расширение локализации  85  1  "1 - при создании линейных объектов учитывать две точки метрики 0 – все точки метрики"
-            digitize_direction,  # Направление цифрования  86  1
-            display_with_semantic,  # Отображение с учетом семантики  87  1   1- для объектов с внешним видом пользователя, учитывающих семантику
-            object_number,  # Номер расширения +88 2 Для объектов из серии – номер объекта в серии, для остальных 0.
-            connected_label_count,  # Количество связанных подписей   90  1   Число от 0 до 16
-            compressable,  # Признак сжатия объекта  91  1   "Возможность сжатия объекта при уменьшении масштаба 1 – не сжимать"
-            max_scale,  # Максимальное увеличение 92  1   "Максимальное увеличение объекта (от 1 до 25.0 раз) Значения от 0 до 250"
-            min_scale,  # Максимальное уменьшение 93  1   "Максимальное уменьшение объекта (от 1 до 25.0 раз) Значения от 0 до 250"
-            is_view_borders,  # Флаг включения границ   94  1   Флаг включения границ видимости
-            reserve,  # Резерв  95  1
-        ) = struct.unpack('<IIII32s32sBBBBBBBBhBBBBBB', obj_raw[obj_idx:obj_idx + 96])
+        obj = data2dict(OBJ_HEADER_DESC, obj_raw[obj_idx:obj_idx + 96])
 
-        raw = obj_raw[obj_idx:obj_idx + full_length]
-        short_name = strip_0(short_name).decode('cp1251')
-        name = strip_0(name).decode('cp1251')
-
-        localization = OBJECT_TYPE.CODES.get(localization, OBJECT_TYPE.UNKNOWN)
+        raw = obj_raw[obj_idx:obj_idx + obj['full_length']]
+        obj['short_name'] = strip_0(obj['short_name']).decode('cp1251')
+        obj['name'] = strip_0(obj['name']).decode('cp1251')
+        obj['localization'] = OBJECT_TYPE.CODES.get(obj['localization'], OBJECT_TYPE.UNKNOWN)
 
         # Для площадных объектов возможны направления цифрования объект слева (обход объекта против часовой стрелки: используется для водоемов и углублений рельефа) и объект справа (обход объекта по часовой стрелке).
         # Для линейных объектов можно определенное (для тех объектов, для которых имеет смысл различать начало и конец метрики, например реки, цифруются от истока к устью) и произвольное для всех остальных случаев.
         # Точечные объекты имеют только произвольное направление цифрования.
         # Все остальные произвольное или определенное.
         # Связанные подписи объектов предназначены для нанесения на карту подписей по семантическим характеристикам объекта, определенным видом шрифта. Шрифт выбирается из существующих подписей классификатора.
-        digitize_direction = DIGITIZE_DIRECTION.CODES.get(digitize_direction, DIGITIZE_DIRECTION.UNKNOWN)
-        obj_idx += full_length
+        obj['digitize_direction'] = DIGITIZE_DIRECTION.CODES.get(obj['digitize_direction'], DIGITIZE_DIRECTION.UNKNOWN)
+        obj_idx += obj['full_length']
 
-        obj = {
-            'full_length': full_length,
-            'classifier_code': classifier_code,
-            'internal_code': internal_code,
-            'id': id,
-            'short_name': short_name,
-            'name': name,
-            'localization': localization,
-            'segment': segment,
-            'is_scalable': is_scalable,
-            'visibility_low': visibility_low,
-            'visibility_high': visibility_high,
-            'localization_extention': localization_extention,
-            'digitize_direction': digitize_direction,
-            'display_with_semantic': display_with_semantic,
-            'object_number': object_number,
-            'connected_label_count': connected_label_count,
-            'compressable': compressable,
-            'max_scale': max_scale,
-            'min_scale': min_scale,
-            'is_view_borders': is_view_borders,
-        }
-        result[classifier_code] = obj
-
-        if connected_label_count:
+        if obj['connected_label_count']:
             obj['connected_labels'] = []
 
         idx = 96
-        for li in xrange(connected_label_count):
-            # print_hex(obj_raw[obj_idx:obj_idx + 16])
-            label = {}
-            # Связанная подпись объекта определяет шрифт, предназначенный для нанесения подписей объекта,
-            # текст которых содержится в качестве семантической характеристики этого объекта.
-            # Описание связанных подписей имеет следующий вид:
-            (
-                label['label_id'],  # Идентификационный код связанной подписи 0   4   Неизменяемый уникальный номер подписи
-                label['semantic_id'],  # Классификационный код семантики 4   4   Код семантики объекта, содержащей текст подписи
-                label['prefix'],  # Постоянный префикс для подписи  8   7   В байтах
-                label['decimal_points']  # Количество десятичных знаков после запятой  15  1   Используется при печати подписи
-            ) = struct.unpack('<II7sB', raw[idx:idx + 16])  # ИТОГО: 16 байт
+        for li in xrange(obj['connected_label_count']):
+            label = data2dict(OBJ_CONNECTED_LABEL_DESC, raw[idx:idx + 16])
             idx += 16
-
-            result[classifier_code]['connected_labels'].append(label)
+            obj['connected_labels'].append(label)
+        result[obj['classifier_code']] = obj
 
     pos_idx = 0
     for i in xrange(pos_count):

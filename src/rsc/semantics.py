@@ -2,7 +2,7 @@
 
 import struct
 
-from tools import split_bits, strip_0, msg, err
+from tools import data2dict, split_bits, strip_0, msg, err
 
 
 class SemanticType(object):
@@ -30,83 +30,74 @@ class SemanticType(object):
     }
 
 
+SEM_OBJ_DESC = (
+    ('I', 'code', 'Код семантики   0   4   Неизменяемый уникальный', ),
+    ('h', 'semantic_type', 'Тип значения семантики  4   2', ),
+    ('B', 'repeatable', 'Повторяемость семантики 6   1   1 - у объекта может быть несколько значений семантики с таким кодом', ),
+    ('B', 'staff_semantic', 'Признак служебной семантики 7   1   1 - семантику можно использовать для всех объектов классификатора', ),
+    ('32s', 'name', 'Название    8   32  ANSI', ),
+    ('16s', 'short_name', 'Короткое имя семантики 40 16 Уникальное символьное имя (ANSI). Используется для подписей полей в базах данных', ),
+    ('8s', 'unit', 'Единица измерения   56  8   ANSI', ),
+    ('h', 'field_size', 'Размер поля семантики   64  2   Число от 0 до 255', ),
+    ('B', 'accuracy', 'Точность семантики  66  1   Количество цифр после запятой (при выводе)', ),
+    ('B', 'is_complex_semantic', 'Флаг    67  1   2 семантика составная', ),
+    ('I', 'semantic_classifier_offset', 'Смещение на описание классификатора семантики   68  4   От начала файла Если нет записей – 0', ),
+    ('I', 'semantic_classifier_records', 'Количество записей в классификаторе данной семантики    72  4   Если нет записей – 0', ),
+    ('I', 'semantic_defaults_offset', 'Смещение на умалчиваемые значения семантики 76  4   От начала файла Если нет записей – 0.', ),
+    ('I', 'semantic_defaults_records', 'Количество записей для умалчиваемых значений    80  4   Если нет записей – 0', ),
+)  # ИТОГО:  84 байта
+
+
+SEMANTIC_CLASSIFIER_RECORD_DESC = (
+    ('I', 'int', 'Числовое значение семантики 0   4', ),
+    ('32s', 'str', 'Символьное значение семантики   4   32  ANSI', ),
+    ('48s', None, '', ),
+)  # ИТОГО:   84 байта
+
+
+SEMANTIC_DEFAULTS_RECORD_DESC = (
+    ('I', 'id', 'Порядковый номер объекта    0   4   Если номер равен 0 – это умалчиваемое значение для семантики', ),
+    ('I', 'sem_code', 'Код семантики   4   4  Из таблицы  2.4', ),
+    ('d', 'min', 'Минимальное значение семантики  4   8', ),
+    ('d', 'def', 'Значение семантики по умолчанию  8   8', ),
+    ('d', 'max', '"Максимальное значение Семантики"  8   8', ),
+)  # ИТОГО:  32 байта
+
+
 def semantics2dict(rsc):
     result = {}
-    sem_raw, sem_offset, sem_count = rsc.get_table_data('SEM\0')
-    cls_raw, cls_offset, cls_count = rsc.get_table_data('CLS\0')
-    def_raw, def_offset, def_count = rsc.get_table_data('DEF\0')
+    sem_raw, sem_offset, sem_count = rsc.get_table_data('sem')
+    cls_raw, cls_offset, cls_count = rsc.get_table_data('cls')
+    def_raw, def_offset, def_count = rsc.get_table_data('def')
 
     sem_idx = 0
     for sem_i in xrange(sem_count):
         # Назначение поля Смещение    Длина   Комментарий
-        (
-            code,  # Код семантики   0   4   Неизменяемый уникальный
-            semantic_type,  # Тип значения семантики  4   2
-            repeatable,  # Повторяемость семантики 6   1   1 - у объекта может быть несколько значений семантики с таким кодом
-            staff_semantic,  # Признак служебной семантики 7   1   1 - семантику можно использовать для всех объектов классификатора
-            name,  # Название    8   32  ANSI
-            short_name,  # Короткое имя семантики 40 16 Уникальное символьное имя (ANSI). Используется для подписей полей в базах данных
-            unit,  # Единица измерения   56  8   ANSI
-            field_size,  # Размер поля семантики   64  2   Число от 0 до 255
-            accuracy,  # Точность семантики  66  1   Количество цифр после запятой (при выводе)
-            is_complex_semantic,  # Флаг    67  1   2 семантика составная
-            semantic_classifier_offset,  # Смещение на описание классификатора семантики   68  4   От начала файла Если нет записей – 0
-            semantic_classifier_records,  # Количество записей в классификаторе данной семантики    72  4   Если нет записей – 0
-            semantic_defaults_offset,  # Смещение на умалчиваемые значения семантики 76  4   От начала файла Если нет записей – 0.
-            semantic_defaults_records,  # Количество записей для умалчиваемых значений    80  4   Если нет записей – 0
-        ) = struct.unpack('<IhBB32s16s8shBBIIII', sem_raw[sem_idx:sem_idx + 84])  # ИТОГО:  84 байта
+        obj = data2dict(SEM_OBJ_DESC, sem_raw[sem_idx:sem_idx + 84])
 
-        name = strip_0(name).decode('cp1251')
-        short_name = strip_0(short_name).decode('cp1251')
-        unit = strip_0(unit).decode('cp1251')
-        semantic_type = SemanticType.CODES.get(semantic_type, SemanticType.UNKNOWN)
+        obj['name'] = strip_0(obj['name']).decode('cp1251')
+        obj['short_name'] = strip_0(obj['short_name']).decode('cp1251')
+        obj['unit'] = strip_0(obj['unit']).decode('cp1251')
+        obj['semantic_type'] = SemanticType.CODES.get(obj['semantic_type'], SemanticType.UNKNOWN)
         sem_idx += 84
 
-        result[code] = {
-            'code': code,
-            'semantic_type': semantic_type,
-            'repeatable': repeatable,
-            'staff_semantic': staff_semantic,
-            'name': name,
-            'short_name': short_name,
-            'unit': unit,
-            'field_size': field_size,
-            'accuracy': accuracy,
-            'is_complex_semantic': is_complex_semantic,
-            'classifiers': [],
-            'defaults': [],
-        }
+        obj['classifiers'] = []
+        obj['defaults'] = []
 
-        cls_idx = cls_offset - semantic_classifier_offset
-        for cls_i in xrange(semantic_classifier_records):
-            (
-                int_value,  # Числовое значение семантики 0   4
-                string_value,  # Символьное значение семантики   4   32  ANSI
-                reserved,
-            ) = struct.unpack('<I32s48s', cls_raw[cls_idx:cls_idx + 84])  # ИТОГО:   84 байта
-            string_value = strip_0(string_value).decode('cp1251')
+        cls_idx = cls_offset - obj['semantic_classifier_offset']
+        for cls_i in xrange(obj['semantic_classifier_records']):
+            cl = data2dict(SEMANTIC_CLASSIFIER_RECORD_DESC, cls_raw[cls_idx:cls_idx + 84])
+            cl['str'] = strip_0(cl['str']).decode('cp1251')
             cls_idx += 84
-            result[code]['classifiers'].append([int_value, string_value, ])
+            obj['classifiers'].append(cl)
 
-        def_idx = def_offset - semantic_defaults_offset
-        for def_i in xrange(semantic_defaults_records):
-            (
-                id,  # Порядковый номер объекта    0   4   Если номер равен 0 – это умалчиваемое значение для семантики
-                sem_code,  # Код семантики   4   4  Из таблицы  2.4
-                min_value,  # Минимальное значение семантики  4   8
-                default_value,  # "Значение семантики по умолчанию "  8   8
-                max_value,  # "Максимальное значение Семантики"  8   8
-            ) = struct.unpack('<IIddd', def_raw[def_idx:def_idx + 32])  # ИТОГО:  32 байта
+        def_idx = def_offset - obj['semantic_defaults_offset']
+        for def_i in xrange(obj['semantic_defaults_records']):
+            df = data2dict(SEMANTIC_DEFAULTS_RECORD_DESC, def_raw[def_idx:def_idx + 32])
             def_idx += 32
+            obj['defaults'].append(df)
 
-            p = {
-                'id': id,
-                'code': sem_code,
-                'min_value': min_value,
-                'default_value': default_value,
-                'max_value': max_value,
-            }
-            result[code]['defaults'].append(p)
+        result[obj['code']] = obj
     rsc.semantics_dict = result
     # sys.stdout.write(yaml.dump(result, allow_unicode=True, default_flow_style=False))
     # sys.stdout.write(yaml.dump(result, allow_unicode=True))

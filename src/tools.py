@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import struct
 import sys
 
 
@@ -39,7 +40,7 @@ def print_hex(data, chunk_size=8):
         h = ' '.join(ha)
         a = ''.join(aa)
 
-        err('%s | %s\n' % (h, a))
+        err('%s | %s' % (h, a))
 
 
 def strip_0(data):
@@ -47,3 +48,30 @@ def strip_0(data):
     if idx != -1 and idx < len(data):
         data = data[:idx]
     return data.strip()
+
+
+def data2dict(desc, data):
+    masks = {
+        '@': True,  # native  native  native
+        '=': True,  # native  standard    none
+        '<': True,  # little-endian   standard    none
+        '>': True,  # big-endian  standard    none
+        '!': True,  # network (= big-endian)  standard    none
+    }
+    result = {}
+    mask = '<'
+    for i, field_desc in enumerate(desc):
+        field_mask, field_name, comment = field_desc
+        # if field_mask[0] not in masks:
+        #     field_mask = '%s%s' % ('<', field_mask)
+        mask = '%s%s' % (mask, field_mask)
+    # print_hex(data)
+    # err('%s' % len(data))
+    # err(mask)
+    raw = struct.unpack(mask, data)
+    for i, field_desc in enumerate(desc):
+        field_mask, field_name, comment = field_desc
+        value = raw[i]
+        if field_name:
+            result[field_name] = value
+    return result

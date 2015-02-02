@@ -5,7 +5,7 @@ Parse *.RSC file
 
     python src/parse_rsc.py examples/100t98g.rsc
 
-    python src/parse_rsc.py --output-objects objects.yaml --output-semantics semantics.yaml -- examples/100t98g.rsc
+    python src/parse_rsc.py --output-objects objects.yaml --output-semantics semantics.yaml --output-parameters parameters.yaml -- examples/100t98g.rsc
 
 Parse *.SXF file
 
